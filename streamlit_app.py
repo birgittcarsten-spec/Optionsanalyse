@@ -112,12 +112,22 @@ def main():
                 st.caption("TWS/Gateway muss auf Port 7497 laufen")
                 if st.button("🔗 IB verbinden", use_container_width=True, key="ib_connect_btn"):
                     try:
-                        from engine_market_data import IBAdapter
-                        adapter = IBAdapter(host="127.0.0.1", port=7497, client_id=1)
-                        adapter.connect()
+                        import asyncio
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        
+                        from ib_insync import IB, util
+                        util.startLoop()  # ib_insync's eigene Event-Loop-Lösung
+                        
+                        ib = IB()
+                        ib.connect("127.0.0.1", 7497, clientId=1)
+                        
                         st.session_state.ib_connected = True
-                        st.session_state.ib_adapter = adapter
-                        st.success("✅ Verbindung hergestellt!")
+                        st.session_state.ib_instance = ib
+                        st.success("✅ IB verbunden!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Verbindung fehlgeschlagen: {e}")
