@@ -196,21 +196,27 @@ def load_live_quotes(symbols: list[str]) -> tuple[dict, bool]:
 
     # IB-Modus: Kurse über TWS laden
     if data_source == "ib" and st.session_state.get("ib_connected", False):
-        adapter = st.session_state.get("ib_adapter")
-        if adapter:
+        ib = st.session_state.get("ib_instance")
+        if ib:
+            from ib_insync import Stock
             quotes = {}
             for symbol in symbols:
                 try:
-                    price = adapter.get_stock_price(symbol)
-                    quotes[symbol] = {
-                        "price": price,
-                        "change": 0.0,
-                        "change_pct": 0.0,
-                        "high": price,
-                        "low": price,
-                        "open": price,
-                        "prev_close": price,
-                    }
+                    contract = Stock(symbol, "SMART", "USD")
+                    ib.qualifyContracts(contract)
+                    ticker = ib.reqMktData(contract)
+                    ib.sleep(1)
+                    price = ticker.marketPrice()
+                    if price and price == price:  # not NaN
+                        quotes[symbol] = {
+                            "price": float(price),
+                            "change": float(ticker.last - ticker.close) if ticker.close else 0.0,
+                            "change_pct": float((ticker.last - ticker.close) / ticker.close * 100) if ticker.close and ticker.close > 0 else 0.0,
+                            "high": float(ticker.high) if ticker.high and ticker.high == ticker.high else float(price),
+                            "low": float(ticker.low) if ticker.low and ticker.low == ticker.low else float(price),
+                            "open": float(ticker.open) if ticker.open and ticker.open == ticker.open else float(price),
+                            "prev_close": float(ticker.close) if ticker.close and ticker.close == ticker.close else float(price),
+                        }
                 except Exception:
                     continue
             if quotes:
@@ -239,12 +245,66 @@ def load_live_option_chain(symbol: str) -> tuple[Optional[pd.DataFrame], bool]:
 
     # IB-Modus: Optionskette über TWS laden
     if data_source == "ib" and st.session_state.get("ib_connected", False):
-        adapter = st.session_state.get("ib_adapter")
-        if adapter:
+        ib = st.session_state.get("ib_instance")
+        if ib:
             try:
-                chain = adapter.get_option_chain(symbol)
-                if chain is not None and not chain.empty:
-                    return chain, True
+                from ib_insync import Stock, Option
+                from datetime import date as dt_date
+                
+                contract = Stock(symbol, "SMART", "USD")
+                ib.qualifyContracts(contract)
+                
+                chains = ib.reqSecDefOptParams(
+                    contract.symbol, "", contract.secType, contract.conId
+                )
+                if not chains:
+                    return None, False
+                
+                chain = chains[0]
+                # Take first 3 expirations to limit data
+                expirations = sorted(chain.expirations)[:3]
+                # Take strikes near ATM
+                ticker = ib.reqMktData(contract)
+                ib.sleep(1)
+                spot = ticker.marketPrice()
+                if not spot or spot != spot:
+                    spot = 100.0
+                
+                nearby_strikes = [s for s in chain.strikes if abs(s - spot) / spot < 0.10]
+                
+                rows = []
+                for exp in expirations:
+                    for strike in nearby_strikes[:10]:  # Limit to 10 strikes
+                        for right in ["P", "C"]:
+                            exp_date = dt_date(int(exp[:4]), int(exp[4:6]), int(exp[6:8]))
+                            dte = (exp_date - dt_date.today()).days
+                            if dte <= 0:
+                                continue
+                            
+                            opt = Option(symbol, exp, strike, right, "SMART")
+                            try:
+                                ib.qualifyContracts(opt)
+                                opt_ticker = ib.reqMktData(opt)
+                                ib.sleep(0.2)
+                                
+                                rows.append({
+                                    "underlying": symbol,
+                                    "strike": float(strike),
+                                    "expiration": exp_date,
+                                    "option_type": "call" if right == "C" else "put",
+                                    "bid": float(opt_ticker.bid) if opt_ticker.bid and opt_ticker.bid == opt_ticker.bid else 0.0,
+                                    "ask": float(opt_ticker.ask) if opt_ticker.ask and opt_ticker.ask == opt_ticker.ask else 0.0,
+                                    "last": float(opt_ticker.last) if opt_ticker.last and opt_ticker.last == opt_ticker.last else 0.0,
+                                    "volume": int(opt_ticker.volume) if opt_ticker.volume and opt_ticker.volume == opt_ticker.volume else 0,
+                                    "open_interest": 0,
+                                    "dte": dte,
+                                })
+                            except Exception:
+                                continue
+                
+                if rows:
+                    df = pd.DataFrame(rows)
+                    return df, True
             except Exception:
                 pass
 
