@@ -203,6 +203,38 @@ def render_ai_insights():
         st.warning("Keine Suggestions konnten bewertet werden.")
         return
 
+    # DTE-Filter für AI Insights
+    st.markdown("### ⏱️ Zeitraum wählen")
+    col_dte1, col_dte2 = st.columns([1, 2])
+    with col_dte1:
+        dte_preset = st.radio(
+            "DTE-Bereich",
+            options=["Woche (3-7)", "2 Wochen (7-14)", "Monat (20-45)", "Alle"],
+            index=3,
+            key="ai_dte_preset",
+        )
+    with col_dte2:
+        if dte_preset == "Woche (3-7)":
+            dte_min, dte_max = 3, 7
+            st.caption("📅 Weekly Options – schneller Theta-Decay, höheres Gamma-Risiko")
+        elif dte_preset == "2 Wochen (7-14)":
+            dte_min, dte_max = 7, 14
+            st.caption("📅 Bi-Weekly – Balance zwischen Decay und Flexibilität")
+        elif dte_preset == "Monat (20-45)":
+            dte_min, dte_max = 20, 45
+            st.caption("📅 Monthly – klassischer Stillhalter-Bereich, optimaler Theta-Decay")
+        else:
+            dte_min, dte_max = 0, 999
+            st.caption("📅 Alle Laufzeiten anzeigen")
+
+    # DTE-Filter anwenden
+    suggestions = [s for s in suggestions if dte_min <= s["dte"] <= dte_max]
+
+    if not suggestions:
+        st.warning(f"Keine Empfehlungen im DTE-Bereich {dte_min}–{dte_max} Tage. "
+                   "Versuche einen anderen Zeitraum oder lade den Scanner neu.")
+        return
+
     # Datenquelle anzeigen
     is_live = st.session_state.get("scanner_is_live", False)
     if is_live:
