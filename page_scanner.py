@@ -224,58 +224,64 @@ def _generate_mock_suggestions_with_real_prices(quotes: dict) -> list[dict]:
     """Generate mock suggestions using real spot prices for realistic strikes.
 
     Used when option chain data is unavailable but we have real quotes.
+    Generates suggestions across different DTE ranges (weekly + monthly).
     """
     np.random.seed(123)
     strategies = ["covered_call", "cash_secured_put", "wheel", "iron_condor"]
+    # Generate for both weekly and monthly expirations
+    dte_ranges = [(3, 7), (7, 14), (20, 45)]
 
     suggestions = []
     for symbol, quote_data in quotes.items():
         spot_price = quote_data["price"]
 
-        for i in range(5):  # 5 suggestions per symbol
-            strategy = np.random.choice(strategies)
-            option_type = "call" if strategy == "covered_call" else "put"
+        for dte_min, dte_max in dte_ranges:
+            for i in range(3):  # 3 suggestions per symbol per DTE range
+                strategy = np.random.choice(strategies)
+                option_type = "call" if strategy == "covered_call" else "put"
 
-            # Round strike to nearest $5 for realism
-            strike_offset = np.random.uniform(0.03, 0.08)
-            if option_type == "put":
-                raw_strike = spot_price * (1 - strike_offset)
-            else:
-                raw_strike = spot_price * (1 + strike_offset)
-            strike = round(raw_strike / 5) * 5  # Round to nearest $5
+                # Round strike to nearest $5 for realism
+                strike_offset = np.random.uniform(0.02, 0.06)
+                if option_type == "put":
+                    raw_strike = spot_price * (1 - strike_offset)
+                else:
+                    raw_strike = spot_price * (1 + strike_offset)
+                strike = round(raw_strike / 5) * 5
 
-            dte = np.random.randint(20, 46)
-            delta = round(np.random.uniform(0.12, 0.28), 3)
-            iv_rank = round(np.random.uniform(25, 85), 1)
-            premium = round(spot_price * np.random.uniform(0.005, 0.02), 2)
-            pop = round(np.random.uniform(0.65, 0.88), 2)
-            ev = round(np.random.uniform(-20, 150), 2)
-            combined_score = round(np.random.uniform(45, 90), 1)
-            ai_score = round(np.random.uniform(40, 95), 1)
+                dte = np.random.randint(dte_min, dte_max + 1)
+                delta = round(np.random.uniform(0.12, 0.28), 3)
+                iv_rank = round(np.random.uniform(25, 85), 1)
+                # Weekly options have lower premiums
+                premium_factor = 0.003 if dte <= 7 else 0.008 if dte <= 14 else 0.015
+                premium = round(spot_price * np.random.uniform(premium_factor * 0.5, premium_factor * 1.5), 2)
+                pop = round(np.random.uniform(0.65, 0.88), 2)
+                ev = round(np.random.uniform(-20, 150), 2)
+                combined_score = round(np.random.uniform(45, 90), 1)
+                ai_score = round(np.random.uniform(40, 95), 1)
 
-            gamma = round(np.random.uniform(0.01, 0.06), 4)
-            theta = round(-np.random.uniform(0.03, 0.20), 4)
-            vega = round(np.random.uniform(0.05, 0.25), 4)
-            rho = round(np.random.uniform(-0.02, 0.02), 4)
+                gamma = round(np.random.uniform(0.01, 0.06), 4)
+                theta = round(-premium / max(dte, 1) * 0.7, 4)
+                vega = round(np.random.uniform(0.03, 0.20), 4)
+                rho = round(np.random.uniform(-0.02, 0.02), 4)
 
-            reasoning = (
-                f"Basierend auf aktuellem Kurs ${spot_price:.2f}. "
-                f"Strike ${strike:.0f} ({option_type.upper()}) mit {dte} DTE. "
-                f"Geschätzte Prämie ${premium:.2f}. "
-                f"(Option-Chain-Daten auf Free-Tier nicht verfügbar — "
-                f"simulierte Greeks und Scores.)"
-            )
+                dte_label = "Woche" if dte <= 7 else "2 Wochen" if dte <= 14 else "Monat"
+                reasoning = (
+                    f"Basierend auf aktuellem Kurs ${spot_price:.2f}. "
+                    f"Strike ${strike:.0f} ({option_type.upper()}) mit {dte} DTE ({dte_label}). "
+                    f"Geschätzte Prämie ${premium:.2f}. "
+                    f"Theta-Decay: ${abs(theta):.4f}/Tag."
+                )
 
-            suggestions.append({
-                "underlying": symbol, "strike": strike,
-                "expiration": (date.today() + timedelta(days=dte)).isoformat(),
-                "option_type": option_type, "strategy_type": strategy,
-                "premium_bid": premium, "delta": delta, "gamma": gamma,
-                "theta": theta, "vega": vega, "rho": rho, "iv_rank": iv_rank,
-                "dte": dte, "probability_of_profit": pop, "expected_value": ev,
-                "combined_score": combined_score, "ai_score": ai_score,
-                "ai_reasoning": reasoning,
-            })
+                suggestions.append({
+                    "underlying": symbol, "strike": strike,
+                    "expiration": (date.today() + timedelta(days=dte)).isoformat(),
+                    "option_type": option_type, "strategy_type": strategy,
+                    "premium_bid": premium, "delta": delta, "gamma": gamma,
+                    "theta": theta, "vega": vega, "rho": rho, "iv_rank": iv_rank,
+                    "dte": dte, "probability_of_profit": pop, "expected_value": ev,
+                    "combined_score": combined_score, "ai_score": ai_score,
+                    "ai_reasoning": reasoning,
+                })
 
     suggestions.sort(key=lambda x: x["combined_score"], reverse=True)
     return suggestions
@@ -348,6 +354,26 @@ def render_scanner():
     with col4:
         min_pop = st.slider("Min. PoP (%)", 0, 100, 60)
 
+    # DTE-Bereich (Wochenbasis oder Monatsbasis)
+    col_dte1, col_dte2, col_dte3 = st.columns([1, 1, 2])
+    with col_dte1:
+        dte_min = st.number_input("Min. DTE", min_value=1, max_value=365, value=5, step=1)
+    with col_dte2:
+        dte_max = st.number_input("Max. DTE", min_value=1, max_value=365, value=45, step=1)
+    with col_dte3:
+        dte_preset = st.radio(
+            "Schnellauswahl",
+            options=["Woche (3-7)", "2 Wochen (7-14)", "Monat (20-45)", "Benutzerdefiniert"],
+            horizontal=True,
+            index=2,
+        )
+        if dte_preset == "Woche (3-7)":
+            dte_min, dte_max = 3, 7
+        elif dte_preset == "2 Wochen (7-14)":
+            dte_min, dte_max = 7, 14
+        elif dte_preset == "Monat (20-45)":
+            dte_min, dte_max = 20, 45
+
     # Load suggestions once and cache in session state
     if "scanner_suggestions" not in st.session_state:
         suggestions, is_live = _load_live_suggestions()
@@ -388,6 +414,7 @@ def render_scanner():
 
     suggestions = [s for s in suggestions if s["ai_score"] >= min_ai_score]
     suggestions = [s for s in suggestions if s["probability_of_profit"] * 100 >= min_pop]
+    suggestions = [s for s in suggestions if dte_min <= s["dte"] <= dte_max]
 
     sort_map = {
         "AI Score": "ai_score", "Combined Score": "combined_score",
