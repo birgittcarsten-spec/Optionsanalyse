@@ -132,9 +132,13 @@ def main():
                         ib = IB()
                         ib.connect("127.0.0.1", ib_port, clientId=1)
                         
+                        # Delayed Data anfordern (kostenlos, 15 Min. verzögert)
+                        # MarketDataType: 1=Live, 3=Delayed, 4=Delayed-Frozen
+                        ib.reqMarketDataType(3)
+                        
                         st.session_state.ib_connected = True
                         st.session_state.ib_instance = ib
-                        st.success(f"✅ IB verbunden (Port {ib_port})!")
+                        st.success(f"✅ IB verbunden (Port {ib_port}, Delayed Data)!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Verbindung fehlgeschlagen: {e}")
