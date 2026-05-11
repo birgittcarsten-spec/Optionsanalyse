@@ -348,8 +348,22 @@ def render_scanner():
     with col4:
         min_pop = st.slider("Min. PoP (%)", 0, 100, 60)
 
-    # Load suggestions (live or mock)
-    suggestions, is_live = _load_live_suggestions()
+    # Load suggestions once and cache in session state
+    if "scanner_suggestions" not in st.session_state:
+        suggestions, is_live = _load_live_suggestions()
+        st.session_state.scanner_suggestions = suggestions
+        st.session_state.scanner_is_live = is_live
+    
+    suggestions = st.session_state.scanner_suggestions
+    is_live = st.session_state.scanner_is_live
+    
+    # Refresh button
+    if st.button("🔄 Daten neu laden", key="scanner_refresh"):
+        new_suggestions, new_is_live = _load_live_suggestions()
+        st.session_state.scanner_suggestions = new_suggestions
+        st.session_state.scanner_is_live = new_is_live
+        suggestions = new_suggestions
+        is_live = new_is_live
 
     # Data source indicator
     if is_live:
