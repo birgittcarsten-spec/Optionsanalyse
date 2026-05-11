@@ -187,14 +187,40 @@ def _fetch_option_chain(symbol: str, api_key: str) -> Optional[pd.DataFrame]:
 def load_live_quotes(symbols: list[str]) -> tuple[dict, bool]:
     """Load live stock quotes. Returns (quotes_dict, is_live).
 
+    Checks session state for data source preference (finnhub or ib).
+
     Returns:
         Tuple of (quotes dict, True if live data / False if unavailable).
     """
+    data_source = st.session_state.get("data_source", "finnhub")
+
+    # IB-Modus: Kurse über TWS laden
+    if data_source == "ib" and st.session_state.get("ib_connected", False):
+        adapter = st.session_state.get("ib_adapter")
+        if adapter:
+            quotes = {}
+            for symbol in symbols:
+                try:
+                    price = adapter.get_stock_price(symbol)
+                    quotes[symbol] = {
+                        "price": price,
+                        "change": 0.0,
+                        "change_pct": 0.0,
+                        "high": price,
+                        "low": price,
+                        "open": price,
+                        "prev_close": price,
+                    }
+                except Exception:
+                    continue
+            if quotes:
+                return quotes, True
+
+    # Finnhub-Modus (Standard)
     api_key = _get_finnhub_api_key()
     if not api_key:
         return {}, False
 
-    # Convert to tuple for caching
     quotes = _fetch_stock_quotes(tuple(symbols), api_key)
     if quotes:
         return quotes, True
@@ -204,9 +230,25 @@ def load_live_quotes(symbols: list[str]) -> tuple[dict, bool]:
 def load_live_option_chain(symbol: str) -> tuple[Optional[pd.DataFrame], bool]:
     """Load live option chain for a symbol. Returns (df, is_live).
 
+    Checks session state for data source preference (finnhub or ib).
+
     Returns:
         Tuple of (DataFrame or None, True if live data / False if unavailable).
     """
+    data_source = st.session_state.get("data_source", "finnhub")
+
+    # IB-Modus: Optionskette über TWS laden
+    if data_source == "ib" and st.session_state.get("ib_connected", False):
+        adapter = st.session_state.get("ib_adapter")
+        if adapter:
+            try:
+                chain = adapter.get_option_chain(symbol)
+                if chain is not None and not chain.empty:
+                    return chain, True
+            except Exception:
+                pass
+
+    # Finnhub-Modus (Standard)
     api_key = _get_finnhub_api_key()
     if not api_key:
         return None, False

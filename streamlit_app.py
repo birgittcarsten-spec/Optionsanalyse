@@ -93,6 +93,40 @@ def main():
 
         st.markdown("---")
 
+        # Datenquelle wählen
+        st.markdown("### 🔌 Datenquelle")
+        data_source = st.radio(
+            "Verbindung",
+            options=["Finnhub API", "Interactive Brokers (lokal)"],
+            index=0 if st.session_state.get("data_source", "finnhub") == "finnhub" else 1,
+            key="data_source_radio",
+        )
+        
+        if data_source == "Interactive Brokers (lokal)":
+            st.session_state.data_source = "ib"
+            ib_status = st.session_state.get("ib_connected", False)
+            if ib_status:
+                st.success("🟢 IB verbunden")
+            else:
+                st.warning("🔴 IB nicht verbunden")
+                st.caption("TWS/Gateway muss auf Port 7497 laufen")
+                if st.button("🔗 IB verbinden", use_container_width=True, key="ib_connect_btn"):
+                    try:
+                        from engine_market_data import IBAdapter
+                        adapter = IBAdapter(host="127.0.0.1", port=7497, client_id=1)
+                        adapter.connect()
+                        st.session_state.ib_connected = True
+                        st.session_state.ib_adapter = adapter
+                        st.success("✅ Verbindung hergestellt!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Verbindung fehlgeschlagen: {e}")
+        else:
+            st.session_state.data_source = "finnhub"
+            st.caption("☁️ Cloud-Modus (Finnhub API)")
+
+        st.markdown("---")
+
         st.markdown("### Daten-Status")
         last_update = st.session_state.get("last_update", datetime.now())
         st.caption(f"Letzte Aktualisierung:")
