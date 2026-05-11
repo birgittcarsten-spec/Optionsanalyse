@@ -1,0 +1,67 @@
+# ThetaFlow AI Platform - Default Configuration
+# Version 1.0.0
+
+platform:
+  version: "1.0.0"
+  data_path: "data/"
+  model_path: "data/models/"
+
+underlyings:
+  - AAPL
+  - MSFT
+  - SPY
+  - QQQ
+  - TSLA
+  - AMZN
+  - NVDA
+  - META
+
+data_sources:
+  interactive_brokers:
+    enabled: true
+    host: "127.0.0.1"
+    port: 7497
+    client_id: 1
+  finnhub:
+    enabled: true
+    # API key via environment variable FINNHUB_API_KEY
+  polygon:
+    enabled: false
+    # API key via environment variable POLYGON_API_KEY
+
+strategies:
+  covered_call:
+    min_iv_rank: 25
+    min_delta: 0.15
+    max_delta: 0.30
+    min_dte: 20
+    max_dte: 45
+  cash_secured_put:
+    min_iv_rank: 30
+    min_delta: 0.10
+    max_delta: 0.25
+    min_dte: 20
+    max_dte: 45
+    exclude_earnings_days: 7
+  wheel:
+    min_iv_rank: 25
+    min_delta: 0.15
+    max_delta: 0.30
+    min_dte: 20
+    max_dte: 45
+  iron_condor:
+    min_iv_rank: 40
+    min_delta: 0.10
+    max_delta: 0.20
+    min_dte: 30
+    max_dte: 60
+
+risk:
+  margin_threshold: 0.80
+  var_threshold: 0.05
+  max_position_size_pct: 0.10
+
+backtesting:
+  default_slippage_pct: 0.001
+  default_commission: 0.65
+  enable_rolling: true

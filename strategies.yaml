@@ -1,0 +1,67 @@
+# ThetaFlow AI Platform - Strategy Configuration
+# Detailed filter definitions for each supported strategy
+
+strategies:
+  covered_call:
+    name: "Covered Call"
+    description: "Verkauf einer Call-Option auf eine bestehende Aktienposition"
+    filters:
+      min_iv_rank: 25
+      max_iv_rank: 100
+      min_delta: 0.15
+      max_delta: 0.30
+      min_dte: 20
+      max_dte: 45
+      exclude_earnings_days: null
+    scoring:
+      premium_weight: 0.4
+      probability_weight: 0.35
+      risk_weight: 0.25
+
+  cash_secured_put:
+    name: "Cash Secured Put"
+    description: "Verkauf einer Put-Option mit vollständiger Bardeckung"
+    filters:
+      min_iv_rank: 30
+      max_iv_rank: 100
+      min_delta: 0.10
+      max_delta: 0.25
+      min_dte: 20
+      max_dte: 45
+      exclude_earnings_days: 7
+    scoring:
+      premium_weight: 0.35
+      probability_weight: 0.40
+      risk_weight: 0.25
+
+  wheel:
+    name: "Wheel Strategy"
+    description: "Kombination aus Cash Secured Put und Covered Call im Wechsel"
+    filters:
+      min_iv_rank: 25
+      max_iv_rank: 100
+      min_delta: 0.15
+      max_delta: 0.30
+      min_dte: 20
+      max_dte: 45
+      exclude_earnings_days: null
+    scoring:
+      premium_weight: 0.35
+      probability_weight: 0.35
+      risk_weight: 0.30
+
+  iron_condor:
+    name: "Iron Condor"
+    description: "Gleichzeitiger Verkauf eines Bull Put Spread und Bear Call Spread"
+    filters:
+      min_iv_rank: 40
+      max_iv_rank: 100
+      min_delta: 0.10
+      max_delta: 0.20
+      min_dte: 30
+      max_dte: 60
+      exclude_earnings_days: null
+    scoring:
+      premium_weight: 0.30
+      probability_weight: 0.45
+      risk_weight: 0.25
