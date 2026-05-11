@@ -1,6 +1,7 @@
 """AI-Insights-Seite für das ThetaFlow AI Dashboard.
 
-Top-Empfehlungen der AI_Ranking_Engine mit Begründungen anzeigen.
+Nimmt die Top-Suggestions aus dem Scanner und bewertet sie mit dem
+regelbasierten AI-Scoring. Zeigt Begründungen und Feature-Analyse.
 """
 
 import streamlit as st
@@ -10,68 +11,206 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import date, timedelta
 
+from engine_ai_ranking import AIRankingEngine, RankedSuggestion, RULE_BASED_WEIGHTS
+from model_trade import TradeSuggestion
+from pipeline import load_live_quotes
 
-def _generate_mock_ranked_suggestions() -> list[dict]:
-    """Mock AI-gerankte Suggestions generieren."""
-    np.random.seed(456)
-    suggestions = [
-        {"rank": 1, "underlying": "NVDA", "strategy_type": "cash_secured_put", "strike": 820.00, "expiration": (date.today() + timedelta(days=32)).isoformat(), "option_type": "put", "ai_score": 92.4, "combined_score": 88.1, "premium_bid": 14.50, "delta": 0.18, "iv_rank": 72.3, "dte": 32, "probability_of_profit": 0.82, "expected_value": 185.40, "reasoning": "NVDA zeigt einen IV Rank von 72.3, was auf überbewertete Volatilität hindeutet – ideal für Prämienverkauf. Das Delta von 0.18 bietet ein konservatives Risikoprofil mit 82% Gewinnwahrscheinlichkeit. DTE von 32 Tagen liegt im optimalen Theta-Decay-Bereich.", "feature_contributions": {"IV Rank": 0.28, "Probability of Profit": 0.22, "Expected Value": 0.18, "Delta": 0.12, "DTE": 0.08, "Sektor-Performance": 0.07, "Marktregime": 0.05}},
-        {"rank": 2, "underlying": "AAPL", "strategy_type": "covered_call", "strike": 185.00, "expiration": (date.today() + timedelta(days=25)).isoformat(), "option_type": "call", "ai_score": 87.8, "combined_score": 84.5, "premium_bid": 3.20, "delta": 0.25, "iv_rank": 58.1, "dte": 25, "probability_of_profit": 0.78, "expected_value": 142.30, "reasoning": "AAPL bietet ein ausgewogenes Risiko-Rendite-Profil für Covered Calls. IV Rank bei 58.1 signalisiert moderate Überbewertung der Volatilität. Delta von 0.25 balanciert Prämieneinnahme und Zuweisungsrisiko.", "feature_contributions": {"IV Rank": 0.24, "Probability of Profit": 0.20, "Expected Value": 0.16, "Delta": 0.14, "DTE": 0.10, "Sektor-Performance": 0.09, "Marktregime": 0.07}},
-        {"rank": 3, "underlying": "SPY", "strategy_type": "iron_condor", "strike": 500.00, "expiration": (date.today() + timedelta(days=38)).isoformat(), "option_type": "put", "ai_score": 84.2, "combined_score": 81.9, "premium_bid": 4.80, "delta": 0.12, "iv_rank": 45.6, "dte": 38, "probability_of_profit": 0.85, "expected_value": 168.50, "reasoning": "SPY Iron Condor profitiert vom aktuellen Range-Bound-Marktregime. Niedriges Delta (0.12) bietet hohe Gewinnwahrscheinlichkeit von 85%.", "feature_contributions": {"IV Rank": 0.18, "Probability of Profit": 0.26, "Expected Value": 0.20, "Delta": 0.10, "DTE": 0.09, "Sektor-Performance": 0.05, "Marktregime": 0.12}},
-        {"rank": 4, "underlying": "MSFT", "strategy_type": "cash_secured_put", "strike": 400.00, "expiration": (date.today() + timedelta(days=28)).isoformat(), "option_type": "put", "ai_score": 79.5, "combined_score": 76.8, "premium_bid": 5.40, "delta": 0.20, "iv_rank": 52.8, "dte": 28, "probability_of_profit": 0.80, "expected_value": 128.60, "reasoning": "MSFT Cash Secured Put bei Strike $400 bietet solide Prämie bei akzeptablem Risiko. IV Rank von 52.8 über dem Schwellenwert für Prämienverkauf.", "feature_contributions": {"IV Rank": 0.22, "Probability of Profit": 0.21, "Expected Value": 0.17, "Delta": 0.13, "DTE": 0.11, "Sektor-Performance": 0.10, "Marktregime": 0.06}},
-        {"rank": 5, "underlying": "TSLA", "strategy_type": "wheel", "strike": 235.00, "expiration": (date.today() + timedelta(days=22)).isoformat(), "option_type": "put", "ai_score": 74.1, "combined_score": 72.3, "premium_bid": 6.80, "delta": 0.22, "iv_rank": 68.9, "dte": 22, "probability_of_profit": 0.74, "expected_value": 95.20, "reasoning": "TSLA Wheel Strategy nutzt die hohe IV (Rank 68.9) für überdurchschnittliche Prämien. Höheres Risiko durch volatile Kursbewegungen.", "feature_contributions": {"IV Rank": 0.30, "Probability of Profit": 0.15, "Expected Value": 0.14, "Delta": 0.12, "DTE": 0.08, "Sektor-Performance": 0.06, "Marktregime": 0.15}},
-    ]
-    return suggestions
+
+def _get_scanner_suggestions() -> list[dict]:
+    """Suggestions aus dem Scanner-Session-State holen."""
+    return st.session_state.get("scanner_suggestions", [])
+
+
+def _rank_suggestions_with_ai(suggestions: list[dict]) -> list[dict]:
+    """Suggestions durch die AI Ranking Engine bewerten.
+
+    Verwendet das regelbasierte Scoring (kein trainiertes Modell nötig).
+    """
+    if not suggestions:
+        return []
+
+    # AI Ranking Engine initialisieren (kein Modell = regelbasiertes Scoring)
+    engine = AIRankingEngine(model_path="nonexistent_model.json")
+
+    # TradeSuggestion-Objekte erstellen
+    trade_suggestions = []
+    for s in suggestions[:20]:  # Top 20 für AI-Analyse
+        try:
+            ts = TradeSuggestion(
+                underlying=s["underlying"],
+                strike=float(s["strike"]),
+                expiration=date.fromisoformat(s["expiration"])
+                if isinstance(s["expiration"], str)
+                else s["expiration"],
+                option_type=s["option_type"],
+                strategy_type=s["strategy_type"],
+                premium_bid=float(s["premium_bid"]),
+                delta=float(s["delta"]),
+                iv_rank=float(s["iv_rank"]),
+                dte=int(s["dte"]),
+                probability_of_profit=float(s["probability_of_profit"]),
+                expected_value=float(s["expected_value"]),
+                combined_score=float(s["combined_score"]),
+            )
+            trade_suggestions.append(ts)
+        except (ValueError, KeyError, TypeError):
+            continue
+
+    if not trade_suggestions:
+        return []
+
+    # Marktkontext aus Live-Quotes ableiten
+    underlyings = st.session_state.get("underlyings", [])
+    quotes, _ = load_live_quotes(underlyings)
+
+    market_context = {
+        "market_regime": "neutral",
+        "historical_volatility": {},
+        "sector_performance": {},
+        "vix": 18.0,
+    }
+
+    # AI Ranking durchführen
+    ranked = engine.rank_suggestions(trade_suggestions, market_context)
+
+    # Zurück in dict-Format konvertieren
+    results = []
+    for i, r in enumerate(ranked):
+        s = r.suggestion
+        results.append({
+            "rank": i + 1,
+            "underlying": s.underlying,
+            "strategy_type": s.strategy_type,
+            "strike": s.strike,
+            "expiration": s.expiration.isoformat()
+            if hasattr(s.expiration, "isoformat")
+            else str(s.expiration),
+            "option_type": s.option_type,
+            "ai_score": round(r.ai_score, 1),
+            "combined_score": s.combined_score,
+            "premium_bid": s.premium_bid,
+            "delta": s.delta,
+            "iv_rank": s.iv_rank,
+            "dte": s.dte,
+            "probability_of_profit": s.probability_of_profit,
+            "expected_value": s.expected_value,
+            "reasoning": r.reasoning,
+            "feature_contributions": {
+                "IV Rank": RULE_BASED_WEIGHTS["iv_rank"],
+                "Probability of Profit": RULE_BASED_WEIGHTS["probability_of_profit"],
+                "Delta": RULE_BASED_WEIGHTS["delta_proximity"],
+                "DTE": RULE_BASED_WEIGHTS["dte"],
+                "Expected Value": RULE_BASED_WEIGHTS["expected_value"],
+            },
+        })
+
+    return results
 
 
 def _render_score_comparison(suggestions: list[dict]):
+    """AI Score vs Combined Score Vergleich."""
     fig = go.Figure()
-    symbols = [f"#{s['rank']} {s['underlying']}" for s in suggestions]
-    ai_scores = [s["ai_score"] for s in suggestions]
-    combined_scores = [s["combined_score"] for s in suggestions]
-    fig.add_trace(go.Bar(x=symbols, y=ai_scores, name="AI Score", marker_color="#6366f1", text=[f"{s:.1f}" for s in ai_scores], textposition="auto"))
-    fig.add_trace(go.Bar(x=symbols, y=combined_scores, name="Combined Score", marker_color="#94a3b8", text=[f"{s:.1f}" for s in combined_scores], textposition="auto"))
-    fig.update_layout(title="AI Score vs Combined Score", xaxis_title="Empfehlung", yaxis_title="Score", yaxis_range=[0, 100], barmode="group", template="plotly_white", height=350)
+    symbols = [f"#{s['rank']} {s['underlying']}" for s in suggestions[:10]]
+    ai_scores = [s["ai_score"] for s in suggestions[:10]]
+    combined_scores = [s["combined_score"] for s in suggestions[:10]]
+
+    fig.add_trace(go.Bar(
+        x=symbols, y=ai_scores, name="AI Score",
+        marker_color="#6366f1", text=[f"{s:.1f}" for s in ai_scores], textposition="auto",
+    ))
+    fig.add_trace(go.Bar(
+        x=symbols, y=combined_scores, name="Combined Score",
+        marker_color="#94a3b8", text=[f"{s:.1f}" for s in combined_scores], textposition="auto",
+    ))
+    fig.update_layout(
+        title="AI Score vs Combined Score (Top 10)",
+        xaxis_title="Empfehlung", yaxis_title="Score",
+        yaxis_range=[0, 100], barmode="group", template="plotly_white", height=350,
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_feature_importance(suggestion: dict):
+    """Feature Importance für eine Empfehlung."""
     contributions = suggestion.get("feature_contributions", {})
     if not contributions:
         return
     sorted_pairs = sorted(contributions.items(), key=lambda x: x[1], reverse=True)
     features = [p[0] for p in sorted_pairs]
     importances = [p[1] for p in sorted_pairs]
+
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=importances, y=features, orientation="h", marker_color="#6366f1", text=[f"{imp:.0%}" for imp in importances], textposition="auto"))
-    fig.update_layout(title=f"Feature Importance - {suggestion['underlying']} (Rank #{suggestion['rank']})", xaxis_title="Beitrag zum Score", template="plotly_white", height=300, xaxis_tickformat=".0%", yaxis=dict(autorange="reversed"))
+    fig.add_trace(go.Bar(
+        x=importances, y=features, orientation="h",
+        marker_color="#6366f1", text=[f"{imp:.0%}" for imp in importances], textposition="auto",
+    ))
+    fig.update_layout(
+        title=f"Feature Importance - {suggestion['underlying']} (Rank #{suggestion['rank']})",
+        xaxis_title="Beitrag zum Score", template="plotly_white", height=250,
+        xaxis_tickformat=".0%", yaxis=dict(autorange="reversed"),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_global_feature_importance(suggestions: list[dict]):
+    """Durchschnittliche Feature Importance."""
     all_features: dict[str, list[float]] = {}
     for s in suggestions:
         for feature, importance in s.get("feature_contributions", {}).items():
             if feature not in all_features:
                 all_features[feature] = []
             all_features[feature].append(importance)
+
     avg_importance = {f: np.mean(vals) for f, vals in all_features.items()}
     sorted_features = sorted(avg_importance.items(), key=lambda x: x[1], reverse=True)
     features = [f[0] for f in sorted_features]
     importances = [f[1] for f in sorted_features]
+
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=importances, y=features, orientation="h", marker_color=px.colors.sequential.Viridis[:len(features)], text=[f"{imp:.0%}" for imp in importances], textposition="auto"))
-    fig.update_layout(title="Durchschnittliche Feature Importance (alle Empfehlungen)", xaxis_title="Durchschnittlicher Beitrag", template="plotly_white", height=350, xaxis_tickformat=".0%", yaxis=dict(autorange="reversed"))
+    fig.add_trace(go.Bar(
+        x=importances, y=features, orientation="h",
+        marker_color=px.colors.sequential.Viridis[:len(features)],
+        text=[f"{imp:.0%}" for imp in importances], textposition="auto",
+    ))
+    fig.update_layout(
+        title="Feature-Gewichtung im AI-Ranking",
+        xaxis_title="Gewicht", template="plotly_white", height=300,
+        xaxis_tickformat=".0%", yaxis=dict(autorange="reversed"),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 
 def render_ai_insights():
     """AI-Insights-Seite rendern."""
     st.title("🤖 AI Insights")
-    st.caption("KI-gestützte Empfehlungen mit Begründungen und Feature-Analyse")
+    st.caption("KI-gestützte Empfehlungen basierend auf Scanner-Ergebnissen")
 
-    suggestions = _generate_mock_ranked_suggestions()
+    # Suggestions aus Scanner holen und mit AI ranken
+    scanner_data = _get_scanner_suggestions()
 
+    if not scanner_data:
+        st.warning(
+            "⚠️ Keine Scanner-Daten vorhanden. "
+            "Bitte zuerst die **Scanner**-Seite öffnen, damit Daten geladen werden."
+        )
+        st.info("Tipp: Gehe zum Scanner-Tab, warte bis Daten geladen sind, dann komm hierher zurück.")
+        return
+
+    # AI Ranking durchführen
+    suggestions = _rank_suggestions_with_ai(scanner_data)
+
+    if not suggestions:
+        st.warning("Keine Suggestions konnten bewertet werden.")
+        return
+
+    # Datenquelle anzeigen
+    is_live = st.session_state.get("scanner_is_live", False)
+    if is_live:
+        st.success("🟢 **Live-Daten** — AI-Ranking basiert auf echten Marktdaten")
+    else:
+        st.info("ℹ️ **Demo-Modus** — AI-Ranking basiert auf simulierten Daten")
+
+    # KPI-Karten
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Top Empfehlungen", len(suggestions))
@@ -89,11 +228,21 @@ def render_ai_insights():
     _render_score_comparison(suggestions)
     st.markdown("---")
 
+    # Top-Empfehlungen
     st.markdown("### 🏆 Top-Empfehlungen")
-    strategy_display = {"covered_call": "Covered Call", "cash_secured_put": "Cash Secured Put", "wheel": "Wheel", "iron_condor": "Iron Condor"}
+    strategy_display = {
+        "covered_call": "Covered Call", "cash_secured_put": "Cash Secured Put",
+        "wheel": "Wheel", "iron_condor": "Iron Condor",
+    }
 
-    for suggestion in suggestions:
-        with st.expander(f"**#{suggestion['rank']} {suggestion['underlying']}** - {strategy_display.get(suggestion['strategy_type'], suggestion['strategy_type'])} | AI Score: {suggestion['ai_score']:.1f} | Strike ${suggestion['strike']:.2f}", expanded=(suggestion["rank"] <= 2)):
+    for suggestion in suggestions[:10]:  # Top 10 anzeigen
+        with st.expander(
+            f"**#{suggestion['rank']} {suggestion['underlying']}** - "
+            f"{strategy_display.get(suggestion['strategy_type'], suggestion['strategy_type'])} | "
+            f"AI Score: {suggestion['ai_score']:.1f} | "
+            f"Strike ${suggestion['strike']:.2f}",
+            expanded=(suggestion["rank"] <= 3),
+        ):
             col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
                 st.markdown("**Kennzahlen**")
@@ -112,9 +261,16 @@ def render_ai_insights():
             with col3:
                 st.markdown("**Rendite**")
                 st.write(f"- **Expected Value:** ${suggestion['expected_value']:.2f}")
-                fig = go.Figure(go.Indicator(mode="gauge+number", value=suggestion["ai_score"], gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#6366f1"}, "steps": [{"range": [0, 33], "color": "#fee2e2"}, {"range": [33, 66], "color": "#fef3c7"}, {"range": [66, 100], "color": "#d1fae5"}]}))
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number", value=suggestion["ai_score"],
+                    gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#6366f1"},
+                           "steps": [{"range": [0, 33], "color": "#fee2e2"},
+                                     {"range": [33, 66], "color": "#fef3c7"},
+                                     {"range": [66, 100], "color": "#d1fae5"}]},
+                ))
                 fig.update_layout(height=150, margin=dict(t=20, b=0, l=20, r=20))
                 st.plotly_chart(fig, use_container_width=True)
+
             st.markdown("**🧠 AI-Begründung:**")
             st.info(suggestion["reasoning"])
             _render_feature_importance(suggestion)
@@ -125,14 +281,15 @@ def render_ai_insights():
 
     st.markdown("### ℹ️ Über das AI-Ranking")
     st.markdown("""
-    Das AI-Ranking-System bewertet Trade Suggestions anhand eines trainierten
-    Machine-Learning-Modells (XGBoost). Die Features umfassen:
+    Das AI-Ranking bewertet jeden Trade-Vorschlag aus dem Scanner mit einem
+    gewichteten Score (0–100). Die Gewichtung:
 
-    - **IV Rank**: Implizite Volatilität im Verhältnis zum 52-Wochen-Bereich
-    - **Probability of Profit**: Statistische Gewinnwahrscheinlichkeit
-    - **Expected Value**: Erwarteter Gewinn/Verlust
-    - **Delta**: Sensitivität gegenüber Kursänderungen
-    - **DTE**: Restlaufzeit (optimaler Theta-Decay)
-    - **Sektor-Performance**: Relative Stärke des Sektors
-    - **Marktregime**: Aktuelle Marktphase (Trend/Range/Volatil)
+    - **IV Rank (25%)** — Höherer IV Rank = bessere Prämienumgebung
+    - **Probability of Profit (25%)** — Höhere Gewinnwahrscheinlichkeit = besser
+    - **Delta-Nähe zu 0.20 (20%)** — Idealer Bereich für Stillhalter
+    - **DTE-Nähe zu 32 Tagen (15%)** — Optimaler Theta-Decay
+    - **Expected Value (15%)** — Positiver Erwartungswert bevorzugt
+
+    Sobald ein trainiertes ML-Modell verfügbar ist, werden zusätzlich
+    Sektor-Performance und Marktregime berücksichtigt.
     """)
