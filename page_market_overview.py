@@ -225,11 +225,16 @@ def render_market_overview():
 
     # Data source indicator
     if is_live:
-        st.success("🟢 **Live-Daten** — Echtzeitkurse via Finnhub API (Cache: 5 Min.)")
+        data_source = st.session_state.get("data_source", "finnhub")
+        if data_source == "ib":
+            st.success("🟢 **Live-Daten** — Quelle: **Interactive Brokers (TWS)** — Echtzeit")
+        else:
+            st.success("🟢 **Live-Daten** — Quelle: **Finnhub API** — Cache: 5 Min.")
     else:
         st.warning(
             "⚠️ **Demo-Modus** — Es werden simulierte Daten angezeigt. "
-            "Für Echtzeitdaten bitte `FINNHUB_API_KEY` in den Streamlit Secrets konfigurieren."
+            "Für Echtzeitdaten bitte `FINNHUB_API_KEY` in den Streamlit Secrets konfigurieren "
+            "oder lokal Interactive Brokers verbinden."
         )
 
     col1, col2, col3, col4 = st.columns(4)
