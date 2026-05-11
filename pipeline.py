@@ -6,6 +6,7 @@ StrategyEngine → AIRankingEngine → RiskAnalyzer
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -16,7 +17,7 @@ import streamlit as st
 from bt_simulator import BacktestConfig, BacktestingEngine, BacktestResult
 from engine_ai_ranking import AIRankingEngine, RankedSuggestion
 from engine_greeks import GreeksEngine
-from engine_market_data import DataSourceError, MarketDataLoader
+from engine_market_data import DataSourceError, FinnhubAdapter, MarketDataLoader, PolygonAdapter
 from engine_probability import ProbabilityEngine
 from engine_risk import RiskAnalyzer, RiskMetrics
 from engine_strategy import StrategyEngine
@@ -29,6 +30,196 @@ logger = logging.getLogger("pipeline")
 
 MARKET_DATA_TTL_SECONDS = 300
 COMPUTED_DATA_TTL_SECONDS = 900
+
+
+# ---------------------------------------------------------------------------
+# Live Data Loading (Finnhub / Polygon)
+# ---------------------------------------------------------------------------
+
+
+def _get_finnhub_api_key() -> str:
+    """Get Finnhub API key from Streamlit secrets or environment."""
+    try:
+        return st.secrets["FINNHUB_API_KEY"]
+    except (KeyError, FileNotFoundError, AttributeError):
+        return os.environ.get("FINNHUB_API_KEY", "")
+
+
+def _get_polygon_api_key() -> str:
+    """Get Polygon API key from Streamlit secrets or environment."""
+    try:
+        return st.secrets["POLYGON_API_KEY"]
+    except (KeyError, FileNotFoundError, AttributeError):
+        return os.environ.get("POLYGON_API_KEY", "")
+
+
+@st.cache_resource
+def _get_live_market_data_loader() -> Optional[MarketDataLoader]:
+    """Create a MarketDataLoader with configured API adapters.
+
+    Returns None if no API keys are available.
+    """
+    adapters: list = []
+
+    finnhub_key = _get_finnhub_api_key()
+    if finnhub_key:
+        try:
+            adapter = FinnhubAdapter(api_key=finnhub_key)
+            adapter.connect()
+            adapters.append(adapter)
+        except DataSourceError as e:
+            logger.warning("Finnhub-Adapter konnte nicht verbunden werden: %s", e)
+
+    polygon_key = _get_polygon_api_key()
+    if polygon_key:
+        try:
+            adapter = PolygonAdapter(api_key=polygon_key)
+            adapter.connect()
+            adapters.append(adapter)
+        except DataSourceError as e:
+            logger.warning("Polygon-Adapter konnte nicht verbunden werden: %s", e)
+
+    if not adapters:
+        return None
+
+    return MarketDataLoader(adapters=adapters)
+
+
+@st.cache_data(ttl=300)
+def _fetch_stock_quotes(symbols: tuple, api_key: str) -> dict:
+    """Fetch real stock quotes from Finnhub.
+
+    Uses tuple for symbols to make it hashable for st.cache_data.
+    Cached for 5 minutes to respect rate limits (60 calls/min on free tier).
+    """
+    import requests
+
+    quotes: dict = {}
+    for symbol in symbols:
+        try:
+            response = requests.get(
+                "https://finnhub.io/api/v1/quote",
+                params={"symbol": symbol, "token": api_key},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("c", 0) > 0:
+                    quotes[symbol] = {
+                        "price": data["c"],
+                        "change": data["d"],
+                        "change_pct": data["dp"],
+                        "high": data["h"],
+                        "low": data["l"],
+                        "open": data["o"],
+                        "prev_close": data["pc"],
+                    }
+        except Exception:
+            continue
+    return quotes
+
+
+@st.cache_data(ttl=600)
+def _fetch_option_chain(symbol: str, api_key: str) -> Optional[pd.DataFrame]:
+    """Fetch option chain from Finnhub for a single symbol.
+
+    Cached for 10 minutes. Returns None if unavailable (free tier limitation).
+    """
+    import requests
+
+    try:
+        response = requests.get(
+            "https://finnhub.io/api/v1/stock/option-chain",
+            params={"symbol": symbol, "token": api_key},
+            timeout=30,
+        )
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        rows = []
+        from datetime import date as date_type
+
+        for chain_entry in data.get("data", []):
+            exp_str = chain_entry.get("expirationDate", "")
+            if not exp_str:
+                continue
+            exp_date = date_type.fromisoformat(exp_str)
+            dte = (exp_date - date_type.today()).days
+            if dte < 0:
+                continue
+
+            for opt in chain_entry.get("options", {}).get("CALL", []):
+                rows.append({
+                    "underlying": symbol,
+                    "strike": float(opt.get("strike", 0)),
+                    "expiration": exp_date,
+                    "option_type": "call",
+                    "bid": float(opt.get("bid", 0)),
+                    "ask": float(opt.get("ask", 0)),
+                    "last": float(opt.get("lastPrice", 0)),
+                    "volume": int(opt.get("volume", 0)),
+                    "open_interest": int(opt.get("openInterest", 0)),
+                    "dte": dte,
+                })
+            for opt in chain_entry.get("options", {}).get("PUT", []):
+                rows.append({
+                    "underlying": symbol,
+                    "strike": float(opt.get("strike", 0)),
+                    "expiration": exp_date,
+                    "option_type": "put",
+                    "bid": float(opt.get("bid", 0)),
+                    "ask": float(opt.get("ask", 0)),
+                    "last": float(opt.get("lastPrice", 0)),
+                    "volume": int(opt.get("volume", 0)),
+                    "open_interest": int(opt.get("openInterest", 0)),
+                    "dte": dte,
+                })
+
+        if not rows:
+            return None
+
+        return pd.DataFrame(rows)
+    except Exception:
+        return None
+
+
+def load_live_quotes(symbols: list[str]) -> tuple[dict, bool]:
+    """Load live stock quotes. Returns (quotes_dict, is_live).
+
+    Returns:
+        Tuple of (quotes dict, True if live data / False if unavailable).
+    """
+    api_key = _get_finnhub_api_key()
+    if not api_key:
+        return {}, False
+
+    # Convert to tuple for caching
+    quotes = _fetch_stock_quotes(tuple(symbols), api_key)
+    if quotes:
+        return quotes, True
+    return {}, False
+
+
+def load_live_option_chain(symbol: str) -> tuple[Optional[pd.DataFrame], bool]:
+    """Load live option chain for a symbol. Returns (df, is_live).
+
+    Returns:
+        Tuple of (DataFrame or None, True if live data / False if unavailable).
+    """
+    api_key = _get_finnhub_api_key()
+    if not api_key:
+        return None, False
+
+    chain = _fetch_option_chain(symbol, api_key)
+    if chain is not None and not chain.empty:
+        return chain, True
+    return None, False
+
+
+# ---------------------------------------------------------------------------
+# Engine Singletons
+# ---------------------------------------------------------------------------
 
 
 @st.cache_resource
