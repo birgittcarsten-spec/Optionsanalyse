@@ -200,25 +200,25 @@ def load_live_quotes(symbols: list[str]) -> tuple[dict, bool]:
         if ib:
             from ib_insync import Stock
             quotes = {}
-            for symbol in symbols:
-                try:
-                    contract = Stock(symbol, "SMART", "USD")
-                    ib.qualifyContracts(contract)
-                    ticker = ib.reqMktData(contract)
-                    ib.sleep(1)
-                    price = ticker.marketPrice()
-                    if price and price == price:  # not NaN
-                        quotes[symbol] = {
-                            "price": float(price),
-                            "change": float(ticker.last - ticker.close) if ticker.close else 0.0,
-                            "change_pct": float((ticker.last - ticker.close) / ticker.close * 100) if ticker.close and ticker.close > 0 else 0.0,
-                            "high": float(ticker.high) if ticker.high and ticker.high == ticker.high else float(price),
-                            "low": float(ticker.low) if ticker.low and ticker.low == ticker.low else float(price),
-                            "open": float(ticker.open) if ticker.open and ticker.open == ticker.open else float(price),
-                            "prev_close": float(ticker.close) if ticker.close and ticker.close == ticker.close else float(price),
-                        }
-                except Exception:
-                    continue
+            contracts = [Stock(symbol, "SMART", "USD") for symbol in symbols]
+            ib.qualifyContracts(*contracts)
+            
+            # Alle Ticker auf einmal abfragen (schneller als einzeln)
+            tickers = [ib.reqMktData(c) for c in contracts]
+            ib.sleep(2)  # 2 Sekunden warten für alle Ticker gleichzeitig
+            
+            for symbol, ticker in zip(symbols, tickers):
+                price = ticker.marketPrice()
+                if price and price == price:  # not NaN
+                    quotes[symbol] = {
+                        "price": float(price),
+                        "change": float(ticker.last - ticker.close) if ticker.close and ticker.close == ticker.close else 0.0,
+                        "change_pct": float((ticker.last - ticker.close) / ticker.close * 100) if ticker.close and ticker.close > 0 and ticker.close == ticker.close else 0.0,
+                        "high": float(ticker.high) if ticker.high and ticker.high == ticker.high else float(price),
+                        "low": float(ticker.low) if ticker.low and ticker.low == ticker.low else float(price),
+                        "open": float(ticker.open) if ticker.open and ticker.open == ticker.open else float(price),
+                        "prev_close": float(ticker.close) if ticker.close and ticker.close == ticker.close else float(price),
+                    }
             if quotes:
                 return quotes, True
 
