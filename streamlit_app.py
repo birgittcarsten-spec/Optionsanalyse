@@ -109,7 +109,14 @@ def main():
                 st.success("🟢 IB verbunden")
             else:
                 st.warning("🔴 IB nicht verbunden")
-                st.caption("TWS/Gateway muss auf Port 7497 laufen")
+                ib_port = st.radio(
+                    "Port",
+                    options=[7496, 7497],
+                    format_func=lambda p: f"{p} ({'Live' if p == 7496 else 'Paper'})",
+                    horizontal=True,
+                    index=0,
+                    key="ib_port_radio",
+                )
                 if st.button("🔗 IB verbinden", use_container_width=True, key="ib_connect_btn"):
                     try:
                         import asyncio
@@ -120,14 +127,14 @@ def main():
                             asyncio.set_event_loop(loop)
                         
                         from ib_insync import IB, util
-                        util.startLoop()  # ib_insync's eigene Event-Loop-Lösung
+                        util.startLoop()
                         
                         ib = IB()
-                        ib.connect("127.0.0.1", 7497, clientId=1)
+                        ib.connect("127.0.0.1", ib_port, clientId=1)
                         
                         st.session_state.ib_connected = True
                         st.session_state.ib_instance = ib
-                        st.success("✅ IB verbunden!")
+                        st.success(f"✅ IB verbunden (Port {ib_port})!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Verbindung fehlgeschlagen: {e}")
