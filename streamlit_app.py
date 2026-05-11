@@ -51,6 +51,48 @@ def main():
 
         st.markdown("---")
 
+        # Ticker-Verwaltung
+        st.markdown("### 📌 Watchlist")
+        
+        # Aktuelle Ticker anzeigen
+        current_tickers = st.session_state.underlyings
+        st.caption(f"{len(current_tickers)} Ticker aktiv")
+        
+        # Ticker hinzufügen
+        new_ticker = st.text_input(
+            "Ticker hinzufügen",
+            placeholder="z.B. GOOGL",
+            key="new_ticker_input",
+        )
+        if st.button("➕ Hinzufügen", use_container_width=True, key="add_ticker_btn"):
+            ticker = new_ticker.strip().upper()
+            if ticker and ticker not in st.session_state.underlyings:
+                st.session_state.underlyings.append(ticker)
+                # Clear scanner cache so new ticker appears
+                if "scanner_suggestions" in st.session_state:
+                    del st.session_state.scanner_suggestions
+                st.rerun()
+            elif ticker in st.session_state.underlyings:
+                st.warning(f"{ticker} ist bereits in der Watchlist.")
+        
+        # Ticker entfernen
+        if len(current_tickers) > 1:
+            remove_ticker = st.selectbox(
+                "Ticker entfernen",
+                options=[""] + current_tickers,
+                key="remove_ticker_select",
+            )
+            if remove_ticker and st.button("🗑️ Entfernen", use_container_width=True, key="remove_ticker_btn"):
+                st.session_state.underlyings.remove(remove_ticker)
+                if "scanner_suggestions" in st.session_state:
+                    del st.session_state.scanner_suggestions
+                st.rerun()
+        
+        # Alle Ticker als Tags anzeigen
+        st.caption(" · ".join(current_tickers))
+
+        st.markdown("---")
+
         st.markdown("### Daten-Status")
         last_update = st.session_state.get("last_update", datetime.now())
         st.caption(f"Letzte Aktualisierung:")
